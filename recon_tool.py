@@ -167,10 +167,44 @@ def directory_enumeration(base_url: str) -> List[Dict[str, Any]]:
     return findings
 
 
+def extract_security_headers(headers: Dict[str, str]) -> Dict[str, Any]:
+    security_checks = {
+        "strict_transport_security": headers.get("Strict-Transport-Security", "missing"),
+        "x_frame_options": headers.get("X-Frame-Options", "missing"),
+        "x_content_type_options": headers.get("X-Content-Type-Options", "missing"),
+        "content_security_policy": headers.get("Content-Security-Policy", "missing"),
+        "referrer_policy": headers.get("Referrer-Policy", "missing"),
+    }
+    missing = [name for name, value in security_checks.items() if value == "missing"]
+    return {"checks": security_checks, "missing": missing}
+
+
+def subdomain_lookup(domain: str) -> List[str]:
+    try:
+        response = requests.get(f"https://crt.sh/?q=%25.{domain}&output=json", timeout=10)
+        if response.status_code != 200:
+            return []
+        data = response.json()
+        subdomains = []
+        for item in data:
+            name = item.get("name_value")
+            if not name:
+                continue
+            for candidate in name.split("\n"):
+                value = candidate.strip().lower()
+                if value and value.endswith(domain) and value not in subdomains:
+                    subdomains.append(value)
+        return sorted(subdomains)[:20]
+    except Exception:
+        return []
+
+
 def run_recon(target_url: str) -> Dict[str, Any]:
     normalized = normalize_url(target_url)
     parsed = urlparse(normalized)
     host, domain = extract_host_and_domain(normalized)
+    http_summary = fetch_http_summary(normalized)
+    security_headers = extract_security_headers(http_summary.get("headers", {})) if http_summary.get("headers") else {"checks": {}, "missing": []}
 
     report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -179,14 +213,16 @@ def run_recon(target_url: str) -> Dict[str, Any]:
         "domain": domain,
         "tools_used": [
             {"name": "dnspython", "purpose": "DNS record lookups"},
-            {"name": "requests", "purpose": "HTTP requests and directory probing"},
+            {"name": "requests", "purpose": "HTTP requests, directory probing, and subdomain discovery"},
             {"name": "ssl", "purpose": "TLS certificate inspection"},
             {"name": "socket", "purpose": "Port scanning"},
         ],
         "passive": {
             "dns": dns_lookup(domain),
-            "http": fetch_http_summary(normalized),
+            "http": http_summary,
             "tls": ssl_summary(host, 443 if parsed.scheme == "https" else 80),
+            "security_headers": security_headers,
+            "subdomains": subdomain_lookup(domain),
         },
         "active": {
             "ports": port_scan(host),
@@ -224,27 +260,38 @@ def summarize_recon(report: Dict[str, Any]) -> Dict[str, Any]:
     open_ports = report["active"]["ports"]
     paths = report["active"]["interesting_paths"]
     dns = report["passive"]["dns"]
+    security_headers = report["passive"].get("security_headers", {"missing": []})
+    subdomains = report["passive"].get("subdomains", [])
 
     score = 0
     findings: List[str] = []
 
     if http.get("status_code") and http["status_code"] >= 500:
         score += 20
-        findings.append("The site is returning server-side errors, which could indicate an unstable or misconfigured application.")
+        findings.append("The site is returning server-side errors, suggesting instability or a misconfigured application layer.")
     elif http.get("status_code") and http["status_code"] in (401, 403):
         score += 15
-        findings.append("The site is restricting access to some resources, which may indicate an exposed admin or protected endpoint.")
+        findings.append("Access to resources is restricted, which may indicate protected admin or sensitive endpoints.")
+
+    missing_headers = security_headers.get("missing", [])
+    if missing_headers:
+        score += min(25, len(missing_headers) * 8)
+        findings.append(f"Security headers are missing: {', '.join(missing_headers).replace('_', ' ')}. This reduces browser-side protection.")
 
     if open_ports:
         sensitive_ports = {21, 22, 23, 80, 443, 3306, 3389, 8080, 8443}
         detected = sorted({item["port"] for item in open_ports if item["port"] in sensitive_ports})
         if detected:
             score += min(25, len(detected) * 7)
-            findings.append(f"Common service ports are open: {', '.join(str(port) for port in detected)}. This can increase exposure risk.")
+            findings.append(f"Common internet-facing service ports are open: {', '.join(str(port) for port in detected)}.")
 
     if paths:
         score += min(25, len(paths) * 8)
-        findings.append("Several likely web paths responded, which may reveal hidden endpoints or misconfigured assets.")
+        findings.append("The scan found likely exposed web paths, which may reveal hidden admin or development assets.")
+
+    if subdomains:
+        score += min(15, len(subdomains) * 2)
+        findings.append(f"Subdomain discovery returned {len(subdomains)} likely hostnames, which expands the attack surface.")
 
     if tls.get("error"):
         score += 20
@@ -255,16 +302,16 @@ def summarize_recon(report: Dict[str, Any]) -> Dict[str, Any]:
             days_left = (expiry - datetime.now()).days
             if days_left <= 30:
                 score += 20
-                findings.append(f"The TLS certificate expires in {days_left} days, which is a security maintenance concern.")
+                findings.append(f"The TLS certificate expires in {days_left} days, which is a maintenance issue worth tracking.")
         except Exception:
             pass
 
     if any(value == ["DNS timeout"] or value == ["Lookup failed"] or value == ["NXDOMAIN"] for value in dns.values()):
         score += 10
-        findings.append("Some DNS records timed out or failed, which may indicate incomplete public visibility or resolution issues.")
+        findings.append("Some DNS records timed out or failed, which can indicate incomplete public visibility or resolution problems.")
 
     if not findings:
-        findings.append("No obvious high-risk indicators were detected in this quick reconnaissance pass.")
+        findings.append("No obvious weaknesses were detected in this reconnaissance pass; the target appears relatively clean.")
 
     score = min(score, 100)
     if score >= 70:
@@ -274,7 +321,13 @@ def summarize_recon(report: Dict[str, Any]) -> Dict[str, Any]:
     else:
         severity = "LOW RISK"
 
-    return {"score": score, "severity": severity, "findings": findings}
+    overall = "The target appears comparatively exposed and should be reviewed for hidden endpoints, weak headers, and exposed services."
+    if score < 35:
+        overall = "The target appears relatively clean from a quick reconnaissance perspective, with no major exposure indicators detected."
+    elif score < 70:
+        overall = "The target shows some exposure patterns, but nothing immediately conclusive. It should still be reviewed for hardening gaps."
+
+    return {"score": score, "severity": severity, "overall": overall, "findings": findings}
 
 
 def format_text_report(report: Dict[str, Any]) -> str:
@@ -354,6 +407,27 @@ def format_text_report(report: Dict[str, Any]) -> str:
     lines.append("-" * 78)
     lines.append(f"Risk score:    {summary['score']}/100")
     lines.append(f"Risk level:    {summary['severity']}")
+    lines.append(f"Overall:       {summary['overall']}")
+
+    lines.append("")
+    lines.append("PASSIVE DETAILS")
+    lines.append("-" * 78)
+    security_headers = report["passive"].get("security_headers", {})
+    missing_headers = security_headers.get("missing", [])
+    if missing_headers:
+        lines.append("Missing security headers:")
+        for header in missing_headers:
+            lines.append(f"  - {header.replace('_', ' ').title()}")
+    else:
+        lines.append("Missing security headers: None")
+
+    subdomains = report["passive"].get("subdomains", [])
+    if subdomains:
+        lines.append("Likely subdomains:")
+        for subdomain in subdomains[:10]:
+            lines.append(f"  - {subdomain}")
+    else:
+        lines.append("Likely subdomains: None found")
 
     lines.append("")
     lines.append("FINDINGS")

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Website Reconnaissance</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #131b2d;
+      --panel-2: #1b2540;
+      --text: #eaf2ff;
+      --muted: #a6b4cf;
+      --accent: #4cc9f0;
+      --good: #22c55e;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+      --border: rgba(255,255,255,0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: linear-gradient(135deg, #0b1020, #111827);
+      color: var(--text);
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 32px 20px 48px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .header h1 {
+      margin: 0 0 8px;
+      font-size: 2.3rem;
+    }
+    .header p {
+      color: var(--muted);
+      margin: 0;
+    }
+    .search-box {
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      margin-bottom: 24px;
+    }
+    form {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    input[type="text"] {
+      flex: 1;
+      min-width: 260px;
+      padding: 14px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      font-size: 1rem;
+    }
+    button {
+      padding: 14px 22px;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent), #3b82f6);
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .report {
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .label {
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+    .value {
+      font-size: 1.35rem;
+      font-weight: 700;
+    }
+    .section {
+      margin-top: 18px;
+    }
+    .section h3 {
+      margin: 0 0 10px;
+      font-size: 1.1rem;
+      color: var(--accent);
+    }
+    ul {
+      margin: 0;
+      padding-left: 22px;
+      color: var(--text);
+      line-height: 1.7;
+    }
+    .error {
+      color: var(--bad);
+      font-weight: bold;
+      margin-top: 12px;
+    }
+    .small {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Website Reconnaissance</h1>
+      <p>Enter a URL or domain to run passive and active reconnaissance checks.</p>
+    </div>
+
+    <div class="search-box">
+      <form method="POST">
+        <input type="text" name="target" value="{{ target or '' }}" placeholder="https://example.com" />
+        <button type="submit">Run Recon</button>
+      </form>
+    </div>
+
+    {% if report %}
+      {% if report.error %}
+        <div class="error">{{ report.error }}</div>
+      {% else %}
+        <div class="report">
+          <div class="summary-grid">
+            <div class="card">
+              <div class="label">Target</div>
+              <div class="value">{{ report.target }}</div>
+            </div>
+            <div class="card">
+              <div class="label">Risk Score</div>
+              <div class="value">{{ report.summary.score }}/100</div>
+            </div>
+            <div class="card">
+              <div class="label">Risk Level</div>
+              <div class="value">{{ report.summary.severity }}</div>
+            </div>
+            <div class="card">
+              <div class="label">Host</div>
+              <div class="value">{{ report.host }}</div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h3>Overall</h3>
+            <p class="small">{{ report.summary.overall }}</p>
+          </div>
+
+          <div class="section">
+            <h3>Passive Recon</h3>
+            <ul>
+              <li><strong>HTTP Status:</strong> {{ report.passive.http.status_code }}</li>
+              <li><strong>Server:</strong> {{ report.passive.http.server or 'Unknown' }}</li>
+              <li><strong>Title:</strong> {{ report.passive.http.title or 'Unknown' }}</li>
+              <li><strong>Final URL:</strong> {{ report.passive.http.final_url or 'Unknown' }}</li>
+              <li><strong>Response Time:</strong> {{ report.passive.http.response_time_ms or 'Unknown' }} ms</li>
+            </ul>
+          </div>
+
+          <div class="section">
+            <h3>DNS</h3>
+            <ul>
+              {% for key, values in report.passive.dns.items() %}
+                {% if values %}
+                  <li><strong>{{ key }}:</strong> {{ values|join(', ') }}</li>
+                {% endif %}
+              {% endfor %}
+            </ul>
+          </div>
+
+          <div class="section">
+            <h3>Security Headers</h3>
+            <ul>
+              {% for key, value in report.passive.security_headers.checks.items() %}
+                <li><strong>{{ key.replace('_',' ')|title }}:</strong> {{ value }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+
+          <div class="section">
+            <h3>Subdomains</h3>
+            <ul>
+              {% if report.passive.subdomains %}
+                {% for sub in report.passive.subdomains %}
+                  <li>{{ sub }}</li>
+                {% endfor %}
+              {% else %}
+                <li>No subdomains found.</li>
+              {% endif %}
+            </ul>
+          </div>
+
+          <div class="section">
+            <h3>Active Recon</h3>
+            <ul>
+              <li><strong>Open Ports:</strong> {{ report.active.ports|map(attribute='port')|join(', ') if report.active.ports else 'None detected' }}</li>
+              {% if report.active.interesting_paths %}
+                {% for item in report.active.interesting_paths[:10] %}
+                  <li><strong>{{ item.path }}:</strong> HTTP {{ item.status_code }}</li>
+                {% endfor %}
+              {% else %}
+                <li>No interesting paths found.</li>
+              {% endif %}
+            </ul>
+          </div>
+
+          <div class="section">
+            <h3>Findings</h3>
+            <ul>
+              {% for item in report.summary.findings %}
+                <li>{{ item }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+      {% endif %}
+    {% endif %}
+  </div>
+</body>
+</html>
